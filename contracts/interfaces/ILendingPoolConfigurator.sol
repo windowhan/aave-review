@@ -4,17 +4,17 @@ pragma experimental ABIEncoderV2;
 
 interface ILendingPoolConfigurator {
   struct InitReserveInput {
-    address aTokenImpl;
-    address stableDebtTokenImpl;
-    address variableDebtTokenImpl;
-    uint8 underlyingAssetDecimals;
-    address interestRateStrategyAddress;
-    address underlyingAsset;
+    address aTokenImpl;                       // 이 Reserve 토큰이 가르키는 aToken의 주소
+    address stableDebtTokenImpl;              // stable debt token의 주소
+    address variableDebtTokenImpl;            // variable dept token의 주소
+    uint8 underlyingAssetDecimals;            // Asset의 대상이 되는 토큰의 가치를 표현하는 Decimal 값이 여기서 저장됨
+    address interestRateStrategyAddress;      // Interest Rate를 구하기 위한 모델의 컨트랙트 주소
+    address underlyingAsset;                  // 이 토큰이 실제로 가르키는 실제 토큰의 컨트랙트 주소
     address treasury;
     address incentivesController;
-    string underlyingAssetName;
-    string aTokenName;
-    string aTokenSymbol;
+    string underlyingAssetName;               // 에셋의 이름
+    string aTokenName;                        // aToken의 이름
+    string aTokenSymbol;                      // aToken의 심볼
     string variableDebtTokenName;
     string variableDebtTokenSymbol;
     string stableDebtTokenName;
@@ -22,7 +22,7 @@ interface ILendingPoolConfigurator {
     bytes params;
   }
 
-  struct UpdateATokenInput {
+  struct UpdateATokenInput {                  // aToken의 정보를 업데이트할 때 사용하는 구조체
     address asset;
     address treasury;
     address incentivesController;
@@ -32,7 +32,7 @@ interface ILendingPoolConfigurator {
     bytes params;
   }
 
-  struct UpdateDebtTokenInput {
+  struct UpdateDebtTokenInput {               // debt 토큰의 정보를 업데이트할 때 사용하는 구조체
     address asset;
     address incentivesController;
     string name;
@@ -49,6 +49,13 @@ interface ILendingPoolConfigurator {
    * @param variableDebtToken The address of the associated variable rate debt token
    * @param interestRateStrategyAddress The address of the interest rate strategy for the reserve
    **/
+
+  // 여기서 asset은 실제 그 거래 대상이 되는 토큰의 애셋 컨트랙트
+  // aToken은 Aave에서 관리하고자 하는 aToken 컨트랙트 주소
+  // stableDebtToken은 stable rate debt token이라는데 내가 아직 이런 개념이 부족해서 잘 모르겠음
+  // variableDebtToken도 마찬가지
+  // interestRateStrategyAddress는 Interest Rate를 결정해주기 위한 모델의 주소가 담김
+
   event ReserveInitialized(
     address indexed asset,
     address indexed aToken,
