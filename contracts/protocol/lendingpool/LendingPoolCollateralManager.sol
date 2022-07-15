@@ -26,6 +26,8 @@ import {LendingPoolStorage} from './LendingPoolStorage.sol';
  * IMPORTANT This contract will run always via DELEGATECALL, through the LendingPool, so the chain of inheritance
  * is the same as the LendingPool, to have compatible storage layouts
  **/
+
+// LendingPoolCollateralManager은 Aave 프로토콜에서 LendingPool에 있는 담보 자산에 대한 관리를 하기 위한 컨트랙트
 contract LendingPoolCollateralManager is
   ILendingPoolCollateralManager,
   VersionedInitializable,

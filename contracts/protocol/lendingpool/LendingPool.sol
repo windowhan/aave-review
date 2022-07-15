@@ -26,6 +26,9 @@ import {UserConfiguration} from '../libraries/configuration/UserConfiguration.so
 import {DataTypes} from '../libraries/types/DataTypes.sol';
 import {LendingPoolStorage} from './LendingPoolStorage.sol';
 
+
+// LendingPool 컨트랙트는 Aave 프로토콜을 사용하는 마켓과 유저가 인터랙션을 할 수 있도록 기능을 제공하는 것
+
 /**
  * @title LendingPool contract
  * @dev Main point of interaction with an Aave protocol's market
@@ -83,6 +86,8 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
    *   on subsequent operations
    * @param provider The address of the LendingPoolAddressesProvider
    **/
+  // 해당 함수는 제공된 Address Provider를 이용해 초기값을 설정하는 초기화 함수로 initializer만 호출이 가능하도록
+  // 작성되어 있음, 보통 이런 함수는 external call을 통해 구현됨, LendingPool의 구현부가 달라질 수도 있기 때문
   function initialize(ILendingPoolAddressesProvider provider) public initializer {
     _addressesProvider = provider;
     _maxStableRateBorrowSizePercent = 2500;
@@ -104,23 +109,31 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
   function deposit(
     address asset,
     uint256 amount,
-    address onBehalfOf,
+    address onBehalfOf,           // onBehalfOf는 자금을 예치하는 대신 aToken을 받는 지갑 주소를 의미
     uint16 referralCode
   ) external override whenNotPaused {
     DataTypes.ReserveData storage reserve = _reserves[asset];
 
-    ValidationLogic.validateDeposit(reserve, amount);
+    // 해당 reserve에서 amount만큼의 자금을 예치할 수 있는지 검증함
+    // Compound 토큰에서도 마찬가지로 Allowed 로직이 있었음
+    ValidationLogic.validateDeposit(reserve, amount);         
 
+    // 해당 reserve에 대응되는 aToken의 주소는 독립적으로 존재함
     address aToken = reserve.aTokenAddress;
 
+    // 새롭게 예치되는 금액만큼 실제로 이자율이 어떻게 변동하는지 이를 업데이트함
     reserve.updateState();
     reserve.updateInterestRates(asset, aToken, amount, 0);
 
+    // 해당 asset으로 msg.sender가 amount를 예치함
     IERC20(asset).safeTransferFrom(msg.sender, aToken, amount);
 
     bool isFirstDeposit = IAToken(aToken).mint(onBehalfOf, amount, reserve.liquidityIndex);
 
+    // 최초 예치일 경우 (해당 reserve에 한해서만)
     if (isFirstDeposit) {
+      // 해당 reserve의 unique id를 토대로 해당 aToken을 받아 관리하게 되는 계정의 소유주에게
+      // 해당 reserve를 사용중이라는 것을 표시해줌
       _usersConfig[onBehalfOf].setUsingAsCollateral(reserve.id, true);
       emit ReserveUsedAsCollateralEnabled(asset, onBehalfOf);
     }
@@ -139,6 +152,8 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
    *   different wallet
    * @return The final amount withdrawn
    **/
+  
+  // 자금 회수를 위한 함수
   function withdraw(
     address asset,
     uint256 amount,
@@ -152,10 +167,12 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
 
     uint256 amountToWithdraw = amount;
 
+    // 만약 amount가 uint256 타입의 최대값이라면 보유한 최대금액을 회수한다는 것으로 판단
     if (amount == type(uint256).max) {
       amountToWithdraw = userBalance;
     }
 
+    // 해당 출금이 정당한지를 확인하기 위한 로직
     ValidationLogic.validateWithdraw(
       asset,
       amountToWithdraw,
@@ -167,15 +184,18 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
       _addressesProvider.getPriceOracle()
     );
 
+    // 여기서는 상태를 업데이트하고 이자율도 출금 이후의 이자율을 계산함
+    // 이전에 deposit과 비교하니 3번째 4번째 인자의 상태에 따라 출금이후, 예치이후의 이자율을 선택하는 모양
     reserve.updateState();
-
     reserve.updateInterestRates(asset, aToken, 0, amountToWithdraw);
 
+    // 만일 모든 자금을 출금하는 것이라면 사용자의 상태에서 더이상 해당 담보는 사용되지 않음으로 표기
     if (amountToWithdraw == userBalance) {
       _usersConfig[msg.sender].setUsingAsCollateral(reserve.id, false);
       emit ReserveUsedAsCollateralDisabled(asset, msg.sender);
     }
 
+    // burn으로 토큰에서 총량을 제거
     IAToken(aToken).burn(msg.sender, to, amountToWithdraw, reserve.liquidityIndex);
 
     emit Withdraw(asset, msg.sender, to, amountToWithdraw);
@@ -207,6 +227,7 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
   ) external override whenNotPaused {
     DataTypes.ReserveData storage reserve = _reserves[asset];
 
+    // 대출 로직이 _executeBorrow 하위에서 실행이 됨, 이후에 분석
     _executeBorrow(
       ExecuteBorrowParams(
         asset,
@@ -233,6 +254,8 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
    * other borrower whose debt should be removed
    * @return The final amount repaid
    **/
+  
+  // 빌린 대출금을 갚을 떄 사용하는 함수
   function repay(
     address asset,
     uint256 amount,
@@ -263,6 +286,8 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
 
     reserve.updateState();
 
+    // Interest Rate Model에 따라서 이게 STABLE인지 VARIABLE인지에 따라 서로 다른 토큰 형식을 사용해
+    // 토큰의 양을 업데이트함
     if (interestRateMode == DataTypes.InterestRateMode.STABLE) {
       IStableDebtToken(reserve.stableDebtTokenAddress).burn(onBehalfOf, paybackAmount);
     } else {
@@ -274,14 +299,18 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
     }
 
     address aToken = reserve.aTokenAddress;
+    // 이자율을 업데이트함
     reserve.updateInterestRates(asset, aToken, paybackAmount, 0);
 
+    // 금리와 상환하고자 하는 금액을 이용해 계산을 수행했을 때 그  결과가 0이라면 더이상 이 토큰을 사용하지
+    // 않음으로 간주함
     if (stableDebt.add(variableDebt).sub(paybackAmount) == 0) {
       _usersConfig[onBehalfOf].setBorrowing(reserve.id, false);
     }
 
     IERC20(asset).safeTransferFrom(msg.sender, aToken, paybackAmount);
 
+    // handleRepayment는 아직 무슨 기능인지 모름
     IAToken(aToken).handleRepayment(msg.sender, paybackAmount);
 
     emit Repay(asset, onBehalfOf, msg.sender, paybackAmount);
@@ -294,6 +323,8 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
    * @param asset The address of the underlying asset borrowed
    * @param rateMode The rate mode that the user wants to swap to
    **/
+  
+  // 금리 방식을 바꾸기 위한 함수
   function swapBorrowRateMode(address asset, uint256 rateMode) external override whenNotPaused {
     DataTypes.ReserveData storage reserve = _reserves[asset];
 
@@ -311,6 +342,7 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
 
     reserve.updateState();
 
+    // Stable일 경우 Variable로 Variable일 경우 Stable로 변환하여 환전함
     if (interestRateMode == DataTypes.InterestRateMode.STABLE) {
       IStableDebtToken(reserve.stableDebtTokenAddress).burn(msg.sender, stableDebt);
       IVariableDebtToken(reserve.variableDebtTokenAddress).mint(
@@ -366,6 +398,10 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
 
     reserve.updateState();
 
+    // 기존에 있었던 밸런스 값을 전부 제거하고, mint 명령을 통해 해당 값만큼을 재할당하면서
+    // currentStableBorrowRate를 이용해서 Borrow Rate를 재설정하는 작업을 수행함
+    // 무언가 잘못되었을 때 사용하는 함수로 보임
+
     IStableDebtToken(address(stableDebtToken)).burn(user, stableDebt);
     IStableDebtToken(address(stableDebtToken)).mint(
       user,
@@ -402,8 +438,11 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
       _addressesProvider.getPriceOracle()
     );
 
+
+    // 특정한 이체된 애셋에 대해서 이를 담보로 사용할 수 있게 할 것인지 안할 것인지를 설정하는 함수
     _usersConfig[msg.sender].setUsingAsCollateral(reserve.id, useAsCollateral);
 
+    // 해당 여부에 따라 서로 다른 이벤트가 발생함
     if (useAsCollateral) {
       emit ReserveUsedAsCollateralEnabled(asset, msg.sender);
     } else {
