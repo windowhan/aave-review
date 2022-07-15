@@ -38,6 +38,9 @@ contract LendingPoolConfigurator is VersionedInitializable, ILendingPoolConfigur
     _;
   }
 
+  // Emergency Admin의 경우 Pool Admin과 동일할 수도 있지만 아닐 수도 있음
+  // 만약 어드민 계정을 분실해서 컨트랙트에 대한 관리가 불가능할 경우 해당 Emergency Admin을 활용하여
+  // 예비로 컨트랙트에 대한 관리 권한을 얻을 수 있음
   modifier onlyEmergencyAdmin {
     require(
       addressesProvider.getEmergencyAdmin() == msg.sender,
@@ -52,14 +55,21 @@ contract LendingPoolConfigurator is VersionedInitializable, ILendingPoolConfigur
     return CONFIGURATOR_REVISION;
   }
 
+  // 여기서 제공되는 initializer modifier의 경우 생성자, 그리고 initializing 과정에서만 호출이 가능하며
+  // lastInitializedRevision 버전보다 revision 버전이 높은 경우에만 초기화를 수행할 수 있도록 지정해준
+  // modifier임
   function initialize(ILendingPoolAddressesProvider provider) public initializer {
+    // LendingPoolAddressesProvider와 LendingPoolConfigurator는 서로 의존적인 관계
     addressesProvider = provider;
+    // pool은 LendingPool의 인스턴스가 저장되는데 이는 Deposit, Borrow, Rate swap 등의 기능을 제공하는
+    // 어떻게보면 프로토콜의 본체와 같은 기능을 담당하는 부분
     pool = ILendingPool(addressesProvider.getLendingPool());
   }
 
   /**
    * @dev Initializes reserves in batch
    **/
+  // 한 번에 여러 개의 Reserve들을 등록하기 위해 있는 함수
   function batchInitReserve(InitReserveInput[] calldata input) external onlyPoolAdmin {
     ILendingPool cachedPool = pool;
     for (uint256 i = 0; i < input.length; i++) {
@@ -67,6 +77,9 @@ contract LendingPoolConfigurator is VersionedInitializable, ILendingPoolConfigur
     }
   }
 
+  // _initReserve 함수는 asset에 해당하는 토큰을 등록하기 위한 함수, pool 또한 지정되어 제공됨
+  // Reserve 들은 전부 LendingPool에 대기하고 있다가 사용자의 인터랙션이 들어오면
+  // 해당 Pool에서 사용자의 요청에 맞는 Asset을 찾아 처리하는 형식
   function _initReserve(ILendingPool pool, InitReserveInput calldata input) internal {
     address aTokenProxyAddress =
       _initTokenWithProxy(
@@ -144,6 +157,8 @@ contract LendingPoolConfigurator is VersionedInitializable, ILendingPoolConfigur
   /**
    * @dev Updates the aToken implementation for the reserve
    **/
+
+  // 당연히 Pool에 위치한 AToken의 정보는 PoolAdmin만 수정할 수 있기 때문에 modifier가 붙어 있음
   function updateAToken(UpdateATokenInput calldata input) external onlyPoolAdmin {
     ILendingPool cachedPool = pool;
 
@@ -163,6 +178,7 @@ contract LendingPoolConfigurator is VersionedInitializable, ILendingPoolConfigur
         input.params
       );
 
+    // _upgradeTokenImplementation으로 업데이트를 수행하는데, 내부에서는 delegatecall이나 call을 사용할듯
     _upgradeTokenImplementation(
       reserveData.aTokenAddress,
       input.implementation,
@@ -175,6 +191,9 @@ contract LendingPoolConfigurator is VersionedInitializable, ILendingPoolConfigur
   /**
    * @dev Updates the stable debt token implementation for the reserve
    **/
+  // 여기서 Debt Token이란 부채 토큰의 개념으로 차입 및 상환 시에 소각되는 이자가 발생하는 토큰임
+  // Compound와 다른 점은 Compound는 그때그때 바로 원본 cToken에 이자율 등을 계산하였지만
+  // 여기서는 별도로 Stable Debt Token과 Variable Debt Token을 두고 관리하는 것 같음
   function updateStableDebtToken(UpdateDebtTokenInput calldata input) external onlyPoolAdmin {
     ILendingPool cachedPool = pool;
 
@@ -209,6 +228,7 @@ contract LendingPoolConfigurator is VersionedInitializable, ILendingPoolConfigur
   /**
    * @dev Updates the variable debt token implementation for the asset
    **/
+  // 여기서는 Variable Debt Token을 업데이트 하기 위한 부분
   function updateVariableDebtToken(UpdateDebtTokenInput calldata input)
     external
     onlyPoolAdmin
@@ -248,6 +268,8 @@ contract LendingPoolConfigurator is VersionedInitializable, ILendingPoolConfigur
    * @param asset The address of the underlying asset of the reserve
    * @param stableBorrowRateEnabled True if stable borrow rate needs to be enabled by default on this reserve
    **/
+  // 이 함수는 특정 Asset에서 대출을 허용하기 위해 사용하는 함수
+  // 당연히 외부에 external로 공개된 함수지만 Pool Admin만 사용이 가능한 함수
   function enableBorrowingOnReserve(address asset, bool stableBorrowRateEnabled)
     external
     onlyPoolAdmin
@@ -266,6 +288,9 @@ contract LendingPoolConfigurator is VersionedInitializable, ILendingPoolConfigur
    * @dev Disables borrowing on a reserve
    * @param asset The address of the underlying asset of the reserve
    **/
+  
+  // 이 함수는 위에 제공된 enableBorrowingOnReserve 함수와 기능적으로 비슷한데
+  // 해당 함수에서는 제공된 asset에 대해 대출 기능을 비활성화하기 위해 제공되는 기능
   function disableBorrowingOnReserve(address asset) external onlyPoolAdmin {
     DataTypes.ReserveConfigurationMap memory currentConfig = pool.getConfiguration(asset);
 
@@ -284,6 +309,12 @@ contract LendingPoolConfigurator is VersionedInitializable, ILendingPoolConfigur
    * @param liquidationBonus The bonus liquidators receive to liquidate this asset. The values is always above 100%. A value of 105%
    * means the liquidator will receive a 5% bonus
    **/
+  
+  // 특정 Asset에 대한 담보에 관련된 정보를 설정하기 위한 함수
+  // LTV나 LiquidationThreshold 및 LiquidationBonus 등을 새로 설정하기 위한 함수임
+  // Liquidation Threshold는 대출과 담보가 담보의 부족으로 정의될 수 있는 비율을 의미함, 즉 대출과 담보의
+  // 상호 임계치 수준을 의미함
+  // 참고자료 : https://docs.aave.com/risk/v/master/asset-risk/risk-parameters
   function configureReserveAsCollateral(
     address asset,
     uint256 ltv,
@@ -295,11 +326,18 @@ contract LendingPoolConfigurator is VersionedInitializable, ILendingPoolConfigur
     //validation of the parameters: the LTV can
     //only be lower or equal than the liquidation threshold
     //(otherwise a loan against the asset would cause instantaneous liquidation)
+    // LTV : 특정 담보로 빌릴 수 있는 최대 통화 금액에 대한 비율
+    // 이 때문에 LTV의 비율이 liquidation threshold보다 작아서는 안됨
     require(ltv <= liquidationThreshold, Errors.LPC_INVALID_CONFIGURATION);
 
+    // 임계값이 0이 아닌 경우
     if (liquidationThreshold != 0) {
       //liquidation bonus must be bigger than 100.00%, otherwise the liquidator would receive less
       //collateral than needed to cover the debt
+
+      // 여기서 Liquidation Bonus라는 청산되는 시점에 청산자가 얻게 되는 보너스는 무조건 기존 값에서
+      // 100% 이상이 되어야 함, 그게 아닐 경우에는 청산자가 금리를 커버할 수 있을만큼의 담보의 양보다 적은 양을
+      // 수신하게 되면서 손실이 발생함
       require(
         liquidationBonus > PercentageMath.PERCENTAGE_FACTOR,
         Errors.LPC_INVALID_CONFIGURATION
@@ -307,11 +345,13 @@ contract LendingPoolConfigurator is VersionedInitializable, ILendingPoolConfigur
 
       //if threshold * bonus is less than PERCENTAGE_FACTOR, it's guaranteed that at the moment
       //a loan is taken there is enough collateral available to cover the liquidation bonus
+      // 임계치 비율 * 담보 보너스의 결과는 무조건 100.00% 보다 작아야 한다는데, 이건 아직 이유를 모르겠음
       require(
         liquidationThreshold.percentMul(liquidationBonus) <= PercentageMath.PERCENTAGE_FACTOR,
         Errors.LPC_INVALID_CONFIGURATION
       );
     } else {
+      // 만일 임계값이 0일 경우에는 bonus 값도 0이 되어야 함
       require(liquidationBonus == 0, Errors.LPC_INVALID_CONFIGURATION);
       //if the liquidation threshold is being set to 0,
       // the reserve is being disabled as collateral. To do so,
@@ -360,6 +400,9 @@ contract LendingPoolConfigurator is VersionedInitializable, ILendingPoolConfigur
    * @dev Activates a reserve
    * @param asset The address of the underlying asset of the reserve
    **/
+  
+  // 해당 에셋이 활성화가 되었는지 아닌지를 설정
+  // 활성화가 되어야지 LendingPool을 통해 사용자들이 접근해서 오퍼레이션을 수행할 수 있음
   function activateReserve(address asset) external onlyPoolAdmin {
     DataTypes.ReserveConfigurationMap memory currentConfig = pool.getConfiguration(asset);
 
@@ -374,6 +417,9 @@ contract LendingPoolConfigurator is VersionedInitializable, ILendingPoolConfigur
    * @dev Deactivates a reserve
    * @param asset The address of the underlying asset of the reserve
    **/
+  
+  // 이는 activeReserve와 완전히 반대되는 명령
+  // 해당 에셋을 비활성화하여 사용하지 못하도록 만드는 명령
   function deactivateReserve(address asset) external onlyPoolAdmin {
     _checkNoLiquidity(asset);
 
@@ -435,6 +481,7 @@ contract LendingPoolConfigurator is VersionedInitializable, ILendingPoolConfigur
    * @param asset The address of the underlying asset of the reserve
    * @param rateStrategyAddress The new address of the interest strategy contract
    **/
+  // 여기서는 내부적으로 활용할 Interest Rate를 계산하기 위한 모델을 새로 설정해주는 기능을 수행함
   function setReserveInterestRateStrategyAddress(address asset, address rateStrategyAddress)
     external
     onlyPoolAdmin
@@ -451,6 +498,9 @@ contract LendingPoolConfigurator is VersionedInitializable, ILendingPoolConfigur
     pool.setPause(val);
   }
 
+
+  // 여기서 Token에 대해서 Proxy를 적용하는 이유는 이후에 해당 기능에 대한 확장, 업데이터 등을
+  // 수행하기에 용이하도록 만들기 위해서 사용하는 것임
   function _initTokenWithProxy(address implementation, bytes memory initParams)
     internal
     returns (address)
