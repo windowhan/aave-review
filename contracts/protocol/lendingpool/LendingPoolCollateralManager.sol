@@ -38,6 +38,7 @@ contract LendingPoolCollateralManager is
   using WadRayMath for uint256;
   using PercentageMath for uint256;
 
+  // 50%
   uint256 internal constant LIQUIDATION_CLOSE_FACTOR_PERCENT = 5000;
 
   struct LiquidationCallLocalVars {
@@ -80,6 +81,7 @@ contract LendingPoolCollateralManager is
    * @param receiveAToken `true` if the liquidators wants to receive the collateral aTokens, `false` if he wants
    * to receive the underlying collateral asset directly
    **/
+  // Health Factor가 1보다 아래로 내려갈 경우 자산을 청산하는 함수
   function liquidationCall(
     address collateralAsset,
     address debtAsset,

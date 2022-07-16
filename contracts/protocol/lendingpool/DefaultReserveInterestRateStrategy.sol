@@ -18,6 +18,8 @@ import {IERC20} from '../../dependencies/openzeppelin/contracts/IERC20.sol';
  *   of the LendingPoolAddressesProvider
  * @author Aave
  **/
+
+// 기본적으로 사용하는 Interest Rate를 계산하기 위한 컨트랙트
 contract DefaultReserveInterestRateStrategy is IReserveInterestRateStrategy {
   using WadRayMath for uint256;
   using SafeMath for uint256;
@@ -40,20 +42,25 @@ contract DefaultReserveInterestRateStrategy is IReserveInterestRateStrategy {
   ILendingPoolAddressesProvider public immutable addressesProvider;
 
   // Base variable borrow rate when Utilization rate = 0. Expressed in ray
+  // 사용률이 현재 0일 경우에 기본적으로 사용할 변동 금리
   uint256 internal immutable _baseVariableBorrowRate;
 
+  // 사용률이 0이 아닌 이미 사용량이 있는 상황에서 최적의 사용률보다 작을 경우에 사용될 금리의 기울기
   // Slope of the variable interest curve when utilization rate > 0 and <= OPTIMAL_UTILIZATION_RATE. Expressed in ray
   uint256 internal immutable _variableRateSlope1;
 
+  // 사용률이 만일 최적의 경우를 넘길 경우에는 금리의 기울기를 다르게 하여 사용함
   // Slope of the variable interest curve when utilization rate > OPTIMAL_UTILIZATION_RATE. Expressed in ray
   uint256 internal immutable _variableRateSlope2;
 
+  // 여기선 기준 금리를 다루는데 이 또한 위랑 마찬가지
   // Slope of the stable interest curve when utilization rate > 0 and <= OPTIMAL_UTILIZATION_RATE. Expressed in ray
   uint256 internal immutable _stableRateSlope1;
 
   // Slope of the stable interest curve when utilization rate > OPTIMAL_UTILIZATION_RATE. Expressed in ray
   uint256 internal immutable _stableRateSlope2;
 
+  // 생성자를 통해 임의로 컨트랙트 배포자가 해당 기울기들, 금리 값 및 대출 금리, 기준 사용률 등을 등록함
   constructor(
     ILendingPoolAddressesProvider provider,
     uint256 optimalUtilizationRate,
@@ -108,6 +115,8 @@ contract DefaultReserveInterestRateStrategy is IReserveInterestRateStrategy {
    * @param reserveFactor The reserve portion of the interest that goes to the treasury of the market
    * @return The liquidity rate, the stable borrow rate and the variable borrow rate
    **/
+  
+  // 이전에 생성자에서 등록한 값들을 기준으로 이자율을 계산하는 함수
   function calculateInterestRates(
     address reserve,
     address aToken,
@@ -129,6 +138,8 @@ contract DefaultReserveInterestRateStrategy is IReserveInterestRateStrategy {
   {
     uint256 availableLiquidity = IERC20(reserve).balanceOf(aToken);
     //avoid stack too deep
+    // 토큰의 유동량에서 추가되어야 하는 양, 제거되어야 하는 양을 계산하고 해당 값을 calculateInterestRates 함수에
+    // 넣어 실행함, 오버로딩된 함수
     availableLiquidity = availableLiquidity.add(liquidityAdded).sub(liquidityTaken);
 
     return
@@ -181,11 +192,14 @@ contract DefaultReserveInterestRateStrategy is IReserveInterestRateStrategy {
   {
     CalcInterestRatesLocalVars memory vars;
 
+    // 전체 대출을 계산
     vars.totalDebt = totalStableDebt.add(totalVariableDebt);
     vars.currentVariableBorrowRate = 0;
     vars.currentStableBorrowRate = 0;
     vars.currentLiquidityRate = 0;
 
+    // 대출량을 기준으로 사용률을 계산함
+    // 대출량과 사용 가능한 유동 가능 토큰의 양을 합친 값으로 전체 대출량을 나눠서 사용량을 계산함
     vars.utilizationRate = vars.totalDebt == 0
       ? 0
       : vars.totalDebt.rayDiv(availableLiquidity.add(vars.totalDebt));
@@ -193,6 +207,9 @@ contract DefaultReserveInterestRateStrategy is IReserveInterestRateStrategy {
     vars.currentStableBorrowRate = ILendingRateOracle(addressesProvider.getLendingRateOracle())
       .getMarketBorrowRate(reserve);
 
+    // 기준선이 넘었을 경우에는 excessUtilizationRateRatio를 계산하여 서로 다르게 취급하는데
+    // 해당 방식은 Compound 프로토콜에서도 있었음
+    // 그냥 경제학 수식 참고하면 되는 부분
     if (vars.utilizationRate > OPTIMAL_UTILIZATION_RATE) {
       uint256 excessUtilizationRateRatio =
         vars.utilizationRate.sub(OPTIMAL_UTILIZATION_RATE).rayDiv(EXCESS_UTILIZATION_RATE);
@@ -223,6 +240,7 @@ contract DefaultReserveInterestRateStrategy is IReserveInterestRateStrategy {
       .rayMul(vars.utilizationRate)
       .percentMul(PercentageMath.PERCENTAGE_FACTOR.sub(reserveFactor));
 
+    // 유동률과 고정 금리, 변동 금리를 계산하여 반환
     return (
       vars.currentLiquidityRate,
       vars.currentStableBorrowRate,
@@ -238,6 +256,9 @@ contract DefaultReserveInterestRateStrategy is IReserveInterestRateStrategy {
    * @param currentAverageStableBorrowRate The current weighted average of all the stable rate loans
    * @return The weighted averaged borrow rate
    **/
+  
+  // 전체 대출 금리를 계산하는 함수
+  // 구체적인 내부 수식은 나중에 계산함
   function _getOverallBorrowRate(
     uint256 totalStableDebt,
     uint256 totalVariableDebt,
