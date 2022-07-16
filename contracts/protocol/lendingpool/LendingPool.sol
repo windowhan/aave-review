@@ -540,12 +540,18 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
     for (vars.i = 0; vars.i < assets.length; vars.i++) {
       aTokenAddresses[vars.i] = _reserves[assets[vars.i]].aTokenAddress;
 
+      // premiums는 뭐지?
+      // assets 변수는 플래시 대출을 수행하기 위한 대상 에셋들의 리스트
+      // 해당 리스트들에서 얼마만큼을 대출할 것인지를 표현한 것이 amounts 리스트
+      // amounts 리스트를 순회하면서 _flashLoanPremiumTotal을 곱하고 10000으로 나누는 것을 보면
+      // 어떤 수치, 확률을 계산하는 것으로 보이는데, _flashLoanPremiumTotal은 무슨 상수인지 잘 모르겠음
       premiums[vars.i] = amounts[vars.i].mul(_flashLoanPremiumTotal).div(10000);
-
+      // receiver address를 향해 해당 amounts 만큼의 값을 전부 각 aToken의 주소로부터 수신받아 대출
       IAToken(aTokenAddresses[vars.i]).transferUnderlyingTo(receiverAddress, amounts[vars.i]);
     }
 
     require(
+      // executor의 역할은 아직 무엇인지 잘 모르겠음
       vars.receiver.executeOperation(assets, amounts, premiums, msg.sender, params),
       Errors.LP_INVALID_FLASH_LOAN_EXECUTOR_RETURN
     );
@@ -557,7 +563,9 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
       vars.currentATokenAddress = aTokenAddresses[vars.i];
       vars.currentAmountPlusPremium = vars.currentAmount.add(vars.currentPremium);
 
+      // 만일 현재 에셋이 Interest Rate Mode가 아무것도 지정되어 있지 않을 경우
       if (DataTypes.InterestRateMode(modes[vars.i]) == DataTypes.InterestRateMode.NONE) {
+        // 이자율 계산, 상태 업데이트 등 몇 가지 기능을 수행하고 진행함
         _reserves[vars.currentAsset].updateState();
         _reserves[vars.currentAsset].cumulateToLiquidityIndex(
           IERC20(vars.currentATokenAddress).totalSupply(),
@@ -570,6 +578,7 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
           0
         );
 
+        // 그리고 해당 토큰으로 프리미엄이 추가된 양을 리시버로부터 전달함
         IERC20(vars.currentAsset).safeTransferFrom(
           receiverAddress,
           vars.currentATokenAddress,
@@ -578,6 +587,7 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
       } else {
         // If the user chose to not return the funds, the system checks if there is enough collateral and
         // eventually opens a debt position
+        // _executeBorrow 함수는 하단에서 분석 예정
         _executeBorrow(
           ExecuteBorrowParams(
             vars.currentAsset,
@@ -607,6 +617,8 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
    * @param asset The address of the underlying asset of the reserve
    * @return The state of the reserve
    **/
+  
+  // 해당 asset에 해당되는 reserve 정보를 가져옴
   function getReserveData(address asset)
     external
     view
@@ -626,6 +638,9 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
    * @return ltv the loan to value of the user
    * @return healthFactor the current health factor of the user
    **/
+  
+  // 해당 유저가 가지고 있는 데이터 정보를 불러옴
+  // 전체 담보이더, 대출이더 및 대출이 가능한 이더의 양, 현재 유동성에 대한 임계치, ltv 등에 대한 정보를 제공
   function getUserAccountData(address user)
     external
     view
@@ -639,6 +654,8 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
       uint256 healthFactor
     )
   {
+    // availableBorrowsETH를 제외한 값들은 전부 계정 정보를 기반으로 계산해내고
+    // availableBorrowsETH는 로딩된 정보를 기반으로 가능한 대출량을 새롭게 계산해서 리턴함 (갱신의 목적)
     (
       totalCollateralETH,
       totalDebtETH,
@@ -775,6 +792,9 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
    * @param balanceFromBefore The aToken balance of the `from` user before the transfer
    * @param balanceToBefore The aToken balance of the `to` user before the transfer
    */
+  
+  // aToken에 대해서 검증, 최종 기능 수행을 수행해주는 함수
+  // 검증을 위한 함수라고 보는게 타당할 것 같다
   function finalizeTransfer(
     address asset,
     address from,
@@ -783,6 +803,7 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
     uint256 balanceFromBefore,
     uint256 balanceToBefore
   ) external override whenNotPaused {
+    // 해당 함수를 수행하는 주체가 해당 asset의 aToken일 경우에만 수행할 수 있게 허용
     require(msg.sender == _reserves[asset].aTokenAddress, Errors.LP_CALLER_MUST_BE_AN_ATOKEN);
 
     ValidationLogic.validateTransfer(
@@ -796,13 +817,18 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
 
     uint256 reserveId = _reserves[asset].id;
 
+    // from이 to와 같지 않을 경우에만 허용해줌
     if (from != to) {
+      // 만약 갖고 있던 밸런스에서 amount만큼을 제거했을 때 토큰의 총량이 0이 되었다면
+      // 더이상 해당 reserve는 담보로 사용할 수 없다고 표시함
       if (balanceFromBefore.sub(amount) == 0) {
         DataTypes.UserConfigurationMap storage fromConfig = _usersConfig[from];
         fromConfig.setUsingAsCollateral(reserveId, false);
         emit ReserveUsedAsCollateralDisabled(asset, from);
       }
 
+      // to의 경우에도 만일 이전 밸런스가 0이고 amount가 0이 아닌 경우에는
+      // 해당 사용자에 대해서 해당 aToken에 대한 담보 여부를 true로 설정함
       if (balanceToBefore == 0 && amount != 0) {
         DataTypes.UserConfigurationMap storage toConfig = _usersConfig[to];
         toConfig.setUsingAsCollateral(reserveId, true);
@@ -829,6 +855,8 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
     address interestRateStrategyAddress
   ) external override onlyLendingPoolConfigurator {
     require(Address.isContract(asset), Errors.LP_NOT_CONTRACT);
+    // 해당 asset에 대해 reserve를 등록하기 위한 정보들, aToken이나 기준 금리 등에 대한 정보를
+    // 입력해서 넣음
     _reserves[asset].init(
       aTokenAddress,
       stableDebtAddress,
@@ -897,6 +925,7 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
 
     address oracle = _addressesProvider.getPriceOracle();
 
+    // ether의 가치로 환산
     uint256 amountInETH =
       IPriceOracleGetter(oracle).getAssetPrice(vars.asset).mul(vars.amount).div(
         10**reserve.configuration.getDecimals()
@@ -922,6 +951,8 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
     uint256 currentStableRate = 0;
 
     bool isFirstBorrowing = false;
+    // 현재 금리가 고정 금리 상태라면 초기 금리 상태나 마찬가지이기 때문에 아무런 변동이 없었다는 뜻
+    // 그 얘기는 현재 최초의 대출이라는 의미임
     if (DataTypes.InterestRateMode(vars.interestRateMode) == DataTypes.InterestRateMode.STABLE) {
       currentStableRate = reserve.currentStableBorrowRate;
 
@@ -940,10 +971,13 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
       );
     }
 
+    // 이게 첫 번째 대출일 경우 해당 reserve에 대한 unique id에 대해서 현재 대출이라는 것을
+    // 표시하기 위해 유저의 설정을 변경함
     if (isFirstBorrowing) {
       userConfig.setBorrowing(reserve.id, true);
     }
 
+    // 대출 이후 새롭게 업데이트 된 이자율을 알아야 하기 때문에 이자율을 새롭게 갱신
     reserve.updateInterestRates(
       vars.asset,
       vars.aTokenAddress,
@@ -951,6 +985,7 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
       vars.releaseUnderlying ? vars.amount : 0
     );
 
+    // 기반이 되는 토큰이 실제로 있을 경우 해당 aToken을 활용해 사용자에게 대출을 수행
     if (vars.releaseUnderlying) {
       IAToken(vars.aTokenAddress).transferUnderlyingTo(vars.user, vars.amount);
     }
@@ -971,11 +1006,17 @@ contract LendingPool is VersionedInitializable, ILendingPool, LendingPoolStorage
   function _addReserveToList(address asset) internal {
     uint256 reservesCount = _reservesCount;
 
+    // 최대로 유지 가능한 에셋의 개수를 넘을 경우에는 에러 발생
     require(reservesCount < _maxNumberOfReserves, Errors.LP_NO_MORE_RESERVES_ALLOWED);
 
+    // 첫 번째 reserve가 에셋과 동일하거나 아니면 해당 에셋의 id가 0이 아니거나 둘 중 하나라면
+    // 이미 추가된 에셋이기 때문에 추가를 수행하지 않음
     bool reserveAlreadyAdded = _reserves[asset].id != 0 || _reservesList[0] == asset;
 
+    // 만일 처음 추가를 시도하는 에셋인 경우에는
     if (!reserveAlreadyAdded) {
+      // reservesCount를 asset의 unique id로 지정하고 해당 리스트의 위치에 asset을 기록하고
+      // _reservesCount를 1 증가시키고 종료
       _reserves[asset].id = uint8(reservesCount);
       _reservesList[reservesCount] = asset;
 
